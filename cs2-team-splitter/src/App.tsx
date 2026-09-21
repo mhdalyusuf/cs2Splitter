@@ -3,7 +3,6 @@ import { supabase } from "./supabaseClient";
 import {
   Swords,
   Shield,
-  Plus,
   Trash2,
   Shuffle,
   Copy,
@@ -178,15 +177,13 @@ export default function App() {
     }
 
     setError("");
-    const { error: insertError } = await supabase
-      .from("players")
-      .insert([
-        {
-          name: trimmedName,
-          skill_rating: newPlayerSkill,
-          elo_rating: 1000 + newPlayerSkill * 50,
-        },
-      ]);
+    const { error: insertError } = await supabase.from("players").insert([
+      {
+        name: trimmedName,
+        skill_rating: newPlayerSkill,
+        elo_rating: 1000 + newPlayerSkill * 50,
+      },
+    ]);
 
     if (insertError) {
       setError(
@@ -393,17 +390,15 @@ export default function App() {
       const isWinner = winnerSide === "CT";
       const eloDiff = isWinner ? 25 : -20;
 
-      await supabase
-        .from("match_players")
-        .insert([
-          {
-            match_id: matchData.id,
-            player_id: p.id,
-            team: "CT",
-            kills,
-            elo_change: eloDiff,
-          },
-        ]);
+      await supabase.from("match_players").insert([
+        {
+          match_id: matchData.id,
+          player_id: p.id,
+          team: "CT",
+          kills,
+          elo_change: eloDiff,
+        },
+      ]);
     }
 
     for (const p of teams.t) {
@@ -411,17 +406,15 @@ export default function App() {
       const isWinner = winnerSide === "T";
       const eloDiff = isWinner ? 25 : -20;
 
-      await supabase
-        .from("match_players")
-        .insert([
-          {
-            match_id: matchData.id,
-            player_id: p.id,
-            team: "T",
-            kills,
-            elo_change: eloDiff,
-          },
-        ]);
+      await supabase.from("match_players").insert([
+        {
+          match_id: matchData.id,
+          player_id: p.id,
+          team: "T",
+          kills,
+          elo_change: eloDiff,
+        },
+      ]);
     }
 
     for (const p of winners) {
@@ -632,7 +625,7 @@ export default function App() {
                         borderRadius: "8px",
                         cursor: "pointer",
                         display: "flex",
-                        justify: "space-between",
+                        justifyContent: "space-between",
                         alignItems: "center",
                       }}
                     >
