@@ -1,24 +1,27 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "./supabaseClient";
 import {
-  Users,
   Swords,
   Shield,
-  Target,
   Plus,
   Trash2,
   Shuffle,
   Copy,
   Check,
-  Zap,
-  Award,
-  Sparkles,
   Trophy,
+  UserCheck,
+  AlertCircle,
+  Award,
 } from "lucide-react";
 
 interface Player {
   id: string;
   name: string;
-  skill: number;
+  skill_rating: number;
+  elo_rating: number;
+  matches_played: number;
+  wins: number;
+  losses: number;
 }
 
 interface SplitResult {
@@ -41,131 +44,219 @@ const CS2_MAPS = [
   "Overpass",
 ];
 
-const PRESETS: { label: string; players: Player[] }[] = [
-  {
-    label: "5v5 Standard Squad",
-    players: [
-      { id: "1", name: "S1mple_Pro", skill: 10 },
-      { id: "2", name: "ZywOo_Clutch", skill: 10 },
-      { id: "3", name: "Niko_Aim", skill: 9 },
-      { id: "4", name: "m0NESY_Flick", skill: 9 },
-      { id: "5", name: "b1t_Headshot", skill: 8 },
-      { id: "6", name: "ropz_Lurk", skill: 8 },
-      { id: "7", name: "Apex_IGL", skill: 7 },
-      { id: "8", name: "Karrigan_Brain", skill: 7 },
-      { id: "9", name: "Rookie_Noob", skill: 4 },
-      { id: "10", name: "Silver_Player", skill: 3 },
-    ],
-  },
-  {
-    label: "2v2 Casual Wingman",
-    players: [
-      { id: "1", name: "Ahmad_Carry", skill: 9 },
-      { id: "2", name: "Samer_Pro", skill: 8 },
-      { id: "3", name: "Omar_Mid", skill: 6 },
-      { id: "4", name: "Khaled_Support", skill: 5 },
-    ],
-  },
-];
-
 export default function App() {
-  const [map, setMap] = useState<string>(CS2_MAPS[0]);
-  const [matchLevel, setMatchLevel] = useState<string>("Competitive (MM)");
-  const [copied, setCopied] = useState<boolean>(false);
-  const [error, setError] = useState<string>("");
+  const [allPlayers, setAllPlayers] = useState<Player[]>([]);
+  const [selectedPlayerIds, setSelectedPlayerIds] = useState<string[]>([]);
+  const [newPlayerName, setNewPlayerName] = useState("");
+  const [newPlayerSkill, setNewPlayerSkill] = useState(5);
 
-  const [players, setPlayers] = useState<Player[]>([
-    { id: "1", name: "Player 1", skill: 7 },
-    { id: "2", name: "Player 2", skill: 7 },
-    { id: "3", name: "Player 3", skill: 5 },
-    { id: "4", name: "Player 4", skill: 5 },
-  ]);
-
+  const [map, setMap] = useState(CS2_MAPS[0]);
+  const [scoreCTInput, setScoreCTInput] = useState(13);
+  const [scoreTInput, setScoreTInput] = useState(11);
   const [teams, setTeams] = useState<SplitResult | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
 
-  const addPlayerPair = () => {
-    const timestamp = Date.now();
-    setPlayers((prev) => [
-      ...prev,
-      { id: `p_${timestamp}`, name: `Player ${prev.length + 1}`, skill: 5 },
-      { id: `p_${timestamp + 1}`, name: `Player ${prev.length + 2}`, skill: 5 },
-    ]);
-  };
+  // 1. جلب قائمة اللاعبين من Supabase مرتبة حسب نقاط الـ Elo
+  const fetchPlayers = async () => {
+    const { data, error } = await supabase
+      .from("players")
+      .select("*")
+      .order("elo_rating", { ascending: false });
 
-  const removePlayerPair = () => {
-    if (players.length > 2) {
-      setPlayers((prev) => prev.slice(0, prev.length - 2));
+    if (error) {
+      console.error("Error fetching players:", error);
+    } else if (data) {
+      setAllPlayers(data);
     }
   };
 
-  const updatePlayer = (
-    id: string,
-    field: keyof Player,
-    value: string | number,
-  ) => {
-    setPlayers((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, [field]: value } : p)),
+  useEffect(() => {
+    fetchPlayers();
+  }, []);
+
+  // 2. إضافة لاعب جديد مع التحقق من عدم التكرار
+  const handleAddPlayer = async () => {
+    const trimmedName = newPlayerName.trim();
+    if (!trimmedName) {
+      setError("الرجاء إدخال اسم اللاعب.");
+      return;
+    }
+
+    setError("");
+    const { error: insertError } = await supabase.from("players").insert([
+      {
+        name: trimmedName,
+        skill_rating: newPlayerSkill,
+        elo_rating: 1000 + newPlayerSkill * 50, // Elo أولي بناءً على المهارة
+      },
+    ]);
+
+    if (insertError) {
+      if (insertError.code === "23505") {
+        setError(`الاسم "${trimmedName}" موجود مسبقاً!`);
+      } else {
+        setError("حدث خطأ أثناء إضافة اللاعب.");
+      }
+      return;
+    }
+
+    setNewPlayerName("");
+    setNewPlayerSkill(5);
+    fetchPlayers();
+  };
+
+  const togglePlayerSelection = (id: string) => {
+    setSelectedPlayerIds((prev) =>
+      prev.includes(id) ? prev.filter((pId) => pId !== id) : [...prev, id],
     );
   };
 
-  const loadPreset = (presetPlayers: Player[]) => {
-    setPlayers(presetPlayers);
-    setTeams(null);
-    setError("");
+  const handleDeletePlayer = async (id: string) => {
+    await supabase.from("players").delete().eq("id", id);
+    setSelectedPlayerIds((prev) => prev.filter((pId) => pId !== id));
+    fetchPlayers();
   };
 
+  // 3. تقسيم الفرق بالتساوي
   const divideTeams = () => {
-    const valid = players.filter((p) => p.name.trim() !== "");
+    const activePlayers = allPlayers.filter((p) =>
+      selectedPlayerIds.includes(p.id),
+    );
 
-    if (valid.length < 2) {
-      setError("الرجاء إدخال اسمين على الأقل للبدء.");
+    if (activePlayers.length < 2) {
+      setError("اختر لاعبين اثنين على الأقل لتقسيم الفرق.");
       return;
     }
 
-    if (valid.length % 2 !== 0) {
-      setError("يجب أن يكون إجمالي عدد اللاعبين زوجياً لتقسيم التشكيلة.");
+    if (activePlayers.length % 2 !== 0) {
+      setError("عدد اللاعبين يجب أن يكون زوجياً.");
       return;
     }
 
     setError("");
+    // الاعتماد على الـ Elo في التقسيم
+    const sorted = [...activePlayers].sort(
+      (a, b) => b.elo_rating - a.elo_rating,
+    );
 
-    const sorted = [...valid].sort((a, b) => b.skill - a.skill);
-    const teamCT: Player[] = [];
-    const teamT: Player[] = [];
+    const ct: Player[] = [];
+    const t: Player[] = [];
     let scoreCT = 0;
     let scoreT = 0;
 
     sorted.forEach((player) => {
       if (
-        teamCT.length < sorted.length / 2 &&
-        (scoreCT <= scoreT || teamT.length === sorted.length / 2)
+        ct.length < sorted.length / 2 &&
+        (scoreCT <= scoreT || t.length === sorted.length / 2)
       ) {
-        teamCT.push(player);
-        scoreCT += player.skill;
+        ct.push(player);
+        scoreCT += player.elo_rating;
       } else {
-        teamT.push(player);
-        scoreT += player.skill;
+        t.push(player);
+        scoreT += player.elo_rating;
       }
     });
 
     setTeams({
-      ct: teamCT,
-      t: teamT,
+      ct,
+      t,
       ctScore: scoreCT,
       tScore: scoreT,
-      ctAvg: (scoreCT / teamCT.length).toFixed(1),
-      tAvg: (scoreT / teamT.length).toFixed(1),
+      ctAvg: (scoreCT / ct.length).toFixed(0),
+      tAvg: (scoreT / t.length).toFixed(0),
     });
+  };
+
+  // 4. تسجيل النتيجة النهائية للمباراة وتحديث الإحصائيات في Supabase
+  const recordMatchResult = async () => {
+    if (!teams) return;
+
+    const winnerSide =
+      scoreCTInput > scoreTInput
+        ? "CT"
+        : scoreCTInput < scoreTInput
+          ? "T"
+          : "DRAW";
+
+    // أ. إضافة الجولة لجدول المباريات
+    const { data: matchData, error: matchError } = await supabase
+      .from("matches")
+      .insert([
+        {
+          map_name: map,
+          score_ct: scoreCTInput,
+          score_t: scoreTInput,
+          winner_side: winnerSide,
+        },
+      ])
+      .select()
+      .single();
+
+    if (matchError || !matchData) {
+      alert("حدث خطأ أثناء حفظ المباراة.");
+      return;
+    }
+
+    const winners =
+      winnerSide === "CT" ? teams.ct : winnerSide === "T" ? teams.t : [];
+    const losers =
+      winnerSide === "CT" ? teams.t : winnerSide === "T" ? teams.ct : [];
+
+    // ب. تحديث بيانات الفائزين (+25 Elo)
+    for (const p of winners) {
+      await supabase
+        .from("players")
+        .update({
+          matches_played: p.matches_played + 1,
+          wins: p.wins + 1,
+          elo_rating: p.elo_rating + 25,
+        })
+        .eq("id", p.id);
+
+      await supabase
+        .from("match_players")
+        .insert([
+          {
+            match_id: matchData.id,
+            player_id: p.id,
+            team: "CT",
+            elo_change: 25,
+          },
+        ]);
+    }
+
+    // ج. تحديث بيانات الخاسرين (-20 Elo)
+    for (const p of losers) {
+      await supabase
+        .from("players")
+        .update({
+          matches_played: p.matches_played + 1,
+          losses: p.losses + 1,
+          elo_rating: Math.max(100, p.elo_rating - 20),
+        })
+        .eq("id", p.id);
+
+      await supabase
+        .from("match_players")
+        .insert([
+          {
+            match_id: matchData.id,
+            player_id: p.id,
+            team: "T",
+            elo_change: -20,
+          },
+        ]);
+    }
+
+    alert("تم تسجيل المباراة وتحديث ترتيب النقاط بنجاح!");
+    setTeams(null);
+    fetchPlayers();
   };
 
   const copyToClipboard = () => {
     if (!teams) return;
-    const text = `CS2 MATCH SPLIT (${map} - ${matchLevel})\n----------------------------\n🔷 Counter-Terrorists (CT):\n${teams.ct
-      .map((p) => `  • ${p.name} (Lvl${p.skill})`)
-      .join("\n")}\nAvg Rating: ${teams.ctAvg}\n\n🔶 Terrorists (T):\n${teams.t
-      .map((p) => `  • ${p.name} (Lvl${p.skill})`)
-      .join("\n")}\nAvg Rating: ${teams.tAvg}`;
-
+    const text = `CS2 MATCH SPLIT (${map})\n----------------------------\n🔷 Counter-Terrorists (CT):\n${teams.ct.map((p) => `  • ${p.name} (Elo${p.elo_rating})`).join("\n")}\n\n🔶 Terrorists (T):\n${teams.t.map((p) => `  • ${p.name} (Elo${p.elo_rating})`).join("\n")}`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -181,40 +272,25 @@ export default function App() {
         fontFamily: "system-ui, sans-serif",
       }}
     >
-      <div style={{ maxWidth: "900px", margin: "0 auto" }}>
+      <div style={{ maxWidth: "950px", margin: "0 auto" }}>
         {/* Header */}
-        <div style={{ textAlign: "center", marginBottom: "32px" }}>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "8px",
-              color: "#f59e0b",
-              fontSize: "14px",
-              fontWeight: "bold",
-              textTransform: "uppercase",
-              letterSpacing: "1px",
-            }}
-          >
-            <Zap size={18} /> CS2 Balanced Matchmaker
-          </div>
+        <div style={{ textAlign: "center", marginBottom: "28px" }}>
           <h1
             style={{
-              fontSize: "32px",
+              fontSize: "30px",
               fontWeight: "800",
-              margin: "8px 0",
               color: "#ffffff",
+              margin: 0,
             }}
           >
-            {" "}
-            Counter-Strike 2 Team Splitter
+            CS2 Squad Matchmaker & Leaderboard
           </h1>
-          <p style={{ color: "#94a3b8", fontSize: "14px" }}>
-            قسّم فريقك بشكل متكافئ تماماً بناءً على مستوى المهارة والخريطة
+          <p style={{ color: "#94a3b8", fontSize: "14px", marginTop: "6px" }}>
+            نظام تصنيف وتوزيع فرق سحابي مدعوم بـ Supabase
           </p>
         </div>
 
-        {/* Configuration Bar */}
+        {/* إضافة لاعب جديد */}
         <div
           style={{
             backgroundColor: "#161b22",
@@ -224,122 +300,86 @@ export default function App() {
             marginBottom: "24px",
           }}
         >
-          <div
+          <h3
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: "16px",
-            }}
-          >
-            <div>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  fontSize: "14px",
-                  color: "#cbd5e1",
-                  marginBottom: "8px",
-                }}
-              >
-                <Target size={16} color="#f59e0b" /> الخريطة (Map)
-              </label>
-              <select
-                value={map}
-                onChange={(e) => setMap(e.target.value)}
-                style={{
-                  width: "100%",
-                  backgroundColor: "#0d1117",
-                  border: "1px solid #30363d",
-                  color: "#fff",
-                  padding: "10px",
-                  borderRadius: "6px",
-                }}
-              >
-                {CS2_MAPS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  fontSize: "14px",
-                  color: "#cbd5e1",
-                  marginBottom: "8px",
-                }}
-              >
-                <Award size={16} color="#f59e0b" /> مستوى المواجهة
-              </label>
-              <select
-                value={matchLevel}
-                onChange={(e) => setMatchLevel(e.target.value)}
-                style={{
-                  width: "100%",
-                  backgroundColor: "#0d1117",
-                  border: "1px solid #30363d",
-                  color: "#fff",
-                  padding: "10px",
-                  borderRadius: "6px",
-                }}
-              >
-                <option value="Casual / Fun">Casual / Fun</option>
-                <option value="Competitive (MM)">Competitive (MM)</option>
-                <option value="Premier Mode">Premier Mode</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Quick Presets */}
-          <div
-            style={{
-              marginTop: "16px",
-              paddingTop: "16px",
-              borderTop: "1px solid #21262d",
+              margin: "0 0 16px 0",
+              fontSize: "16px",
               display: "flex",
               alignItems: "center",
-              gap: "12px",
-              flexWrap: "wrap",
+              gap: "8px",
             }}
           >
-            <span
+            <Plus size={18} color="#f59e0b" /> إضافة لاعب جديد
+          </h3>
+          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+            <input
+              type="text"
+              placeholder="اسم اللاعب"
+              value={newPlayerName}
+              onChange={(e) => setNewPlayerName(e.target.value)}
               style={{
-                fontSize: "12px",
-                color: "#8b949e",
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
+                flex: 2,
+                minWidth: "200px",
+                backgroundColor: "#0d1117",
+                border: "1px solid #30363d",
+                color: "#fff",
+                padding: "10px 14px",
+                borderRadius: "6px",
+              }}
+            />
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "13px", color: "#94a3b8" }}>
+                Skill (1-10):
+              </span>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={newPlayerSkill}
+                onChange={(e) => setNewPlayerSkill(Number(e.target.value))}
+                style={{
+                  width: "60px",
+                  backgroundColor: "#0d1117",
+                  border: "1px solid #30363d",
+                  color: "#f59e0b",
+                  padding: "10px",
+                  borderRadius: "6px",
+                  fontWeight: "bold",
+                }}
+              />
+            </div>
+            <button
+              onClick={handleAddPlayer}
+              style={{
+                backgroundColor: "#f59e0b",
+                color: "#000",
+                border: "none",
+                padding: "10px 20px",
+                borderRadius: "6px",
+                fontWeight: "bold",
+                cursor: "pointer",
               }}
             >
-              <Sparkles size={14} /> نماذج جاهزة:
-            </span>
-            {PRESETS.map((p) => (
-              <button
-                key={p.label}
-                onClick={() => loadPreset(p.players)}
-                style={{
-                  backgroundColor: "#21262d",
-                  border: "1px solid #30363d",
-                  color: "#c9d1d9",
-                  padding: "4px 10px",
-                  borderRadius: "20px",
-                  fontSize: "12px",
-                  cursor: "pointer",
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
+              حفظ اللاعب
+            </button>
           </div>
+          {error && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                color: "#ef4444",
+                fontSize: "13px",
+                marginTop: "12px",
+              }}
+            >
+              <AlertCircle size={16} /> {error}
+            </div>
+          )}
         </div>
 
-        {/* Players List Section */}
+        {/* قائمة اللاعبين وجدول الصدارة */}
         <div
           style={{
             backgroundColor: "#161b22",
@@ -360,168 +400,187 @@ export default function App() {
             <h3
               style={{
                 margin: 0,
+                fontSize: "18px",
                 display: "flex",
                 alignItems: "center",
                 gap: "8px",
-                fontSize: "18px",
               }}
             >
-              <Users size={20} color="#38bdf8" /> قائمة اللاعبين (
-              {players.length})
+              <Award size={20} color="#f59e0b" /> جدول الصدارة واللاعبين (
+              {allPlayers.length})
             </h3>
-            <span style={{ fontSize: "12px", color: "#8b949e" }}>
-              يجب أن يكون العدد زوجياً
+            <span
+              style={{ fontSize: "13px", color: "#38bdf8", fontWeight: "bold" }}
+            >
+              المحددون للعب: {selectedPlayerIds.length}
             </span>
           </div>
 
-          <div style={{ display: "grid", gap: "10px", marginBottom: "16px" }}>
-            {players.map((player, idx) => (
-              <div
-                key={player.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "12px",
-                  backgroundColor: "#0d1117",
-                  padding: "8px 12px",
-                  borderRadius: "8px",
-                  border: "1px solid #21262d",
-                }}
-              >
-                <span
-                  style={{ color: "#6e7681", fontSize: "12px", width: "24px" }}
-                >
-                  #{idx + 1}
-                </span>
-                <input
-                  type="text"
-                  placeholder="اسم اللاعب"
-                  value={player.name}
-                  onChange={(e) =>
-                    updatePlayer(player.id, "name", e.target.value)
-                  }
-                  style={{
-                    flex: 1,
-                    backgroundColor: "transparent",
-                    border: "none",
-                    color: "#fff",
-                    outline: "none",
-                  }}
-                />
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+              gap: "12px",
+            }}
+          >
+            {allPlayers.map((player, rank) => {
+              const isSelected = selectedPlayerIds.includes(player.id);
+              const winRate =
+                player.matches_played > 0
+                  ? Math.round((player.wins / player.matches_played) * 100)
+                  : 0;
+
+              return (
                 <div
-                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                  key={player.id}
+                  onClick={() => togglePlayerSelection(player.id)}
+                  style={{
+                    backgroundColor: isSelected
+                      ? "rgba(56, 189, 248, 0.1)"
+                      : "#0d1117",
+                    border: isSelected
+                      ? "1px solid #38bdf8"
+                      : "1px solid #21262d",
+                    padding: "12px",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
                 >
-                  <span style={{ fontSize: "12px", color: "#8b949e" }}>
-                    Skill:
-                  </span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={player.skill}
-                    onChange={(e) =>
-                      updatePlayer(
-                        player.id,
-                        "skill",
-                        Math.min(10, Math.max(1, Number(e.target.value))),
-                      )
-                    }
+                  <div>
+                    <div
+                      style={{
+                        fontWeight: "bold",
+                        color: "#fff",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          color:
+                            rank === 0
+                              ? "#f59e0b"
+                              : rank === 1
+                                ? "#94a3b8"
+                                : "#854d0e",
+                          fontSize: "12px",
+                        }}
+                      >
+                        #{rank + 1}
+                      </span>
+                      {isSelected && <UserCheck size={16} color="#38bdf8" />}
+                      {player.name}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "#8b949e",
+                        marginTop: "4px",
+                      }}
+                    >
+                      Elo:{" "}
+                      <strong style={{ color: "#38bdf8" }}>
+                        {player.elo_rating}
+                      </strong>{" "}
+                      | W/L: {player.wins}/{player.losses} ({winRate}%)
+                    </div>
+                  </div>
+
+                  <div
                     style={{
-                      width: "50px",
-                      backgroundColor: "#161b22",
-                      border: "1px solid #30363d",
-                      color: "#f59e0b",
-                      padding: "4px 6px",
-                      borderRadius: "4px",
-                      textAlign: "center",
-                      fontWeight: "bold",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
                     }}
-                  />
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeletePlayer(player.id);
+                      }}
+                      style={{
+                        background: "none",
+                        border: "none",
+                        color: "#ef4444",
+                        cursor: "pointer",
+                        padding: "4px",
+                      }}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
-          {error && (
-            <div
-              style={{
-                backgroundColor: "rgba(239, 68, 68, 0.1)",
-                border: "1px solid #ef4444",
-                color: "#fca5a5",
-                padding: "10px",
-                borderRadius: "6px",
-                fontSize: "13px",
-                marginBottom: "16px",
-              }}
-            >
-              {error}
+          <div
+            style={{
+              marginTop: "20px",
+              display: "flex",
+              gap: "16px",
+              alignItems: "center",
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <label
+                style={{
+                  fontSize: "13px",
+                  color: "#cbd5e1",
+                  display: "block",
+                  marginBottom: "6px",
+                }}
+              >
+                الخريطة:
+              </label>
+              <select
+                value={map}
+                onChange={(e) => setMap(e.target.value)}
+                style={{
+                  width: "100%",
+                  backgroundColor: "#0d1117",
+                  border: "1px solid #30363d",
+                  color: "#fff",
+                  padding: "10px",
+                  borderRadius: "6px",
+                }}
+              >
+                {CS2_MAPS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
-
-          <div style={{ display: "flex", gap: "12px" }}>
             <button
-              onClick={addPlayerPair}
+              onClick={divideTeams}
               style={{
                 flex: 1,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "6px",
-                backgroundColor: "#21262d",
-                border: "1px solid #30363d",
-                color: "#fff",
-                padding: "10px",
+                backgroundColor: "#f59e0b",
+                color: "#000",
+                border: "none",
+                padding: "12px",
                 borderRadius: "6px",
+                fontWeight: "bold",
+                fontSize: "15px",
                 cursor: "pointer",
-              }}
-            >
-              <Plus size={16} /> إضافة لاعبين (+2)
-            </button>
-            <button
-              onClick={removePlayerPair}
-              disabled={players.length <= 2}
-              style={{
+                marginTop: "20px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: "6px",
-                backgroundColor: "#21262d",
-                border: "1px solid #30363d",
-                color: players.length <= 2 ? "#484f58" : "#ef4444",
-                padding: "10px 16px",
-                borderRadius: "6px",
-                cursor: players.length <= 2 ? "not-allowed" : "pointer",
+                gap: "8px",
               }}
             >
-              <Trash2 size={16} />
+              <Shuffle size={18} /> تقسيم التشكيلة
             </button>
           </div>
         </div>
 
-        {/* Action Button */}
-        <button
-          onClick={divideTeams}
-          style={{
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "8px",
-            backgroundColor: "#f59e0b",
-            color: "#000",
-            border: "none",
-            padding: "14px",
-            borderRadius: "8px",
-            fontWeight: "bold",
-            fontSize: "16px",
-            cursor: "pointer",
-            marginBottom: "24px",
-          }}
-        >
-          <Shuffle size={20} /> تقسيم الفرق بالتساوي
-        </button>
-
-        {/* Results */}
+        {/* الفرق وتسجيل سكور الجولة */}
         {teams && (
           <div
             style={{
@@ -536,27 +595,19 @@ export default function App() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                marginBottom: "20px",
-                paddingBottom: "12px",
-                borderBottom: "1px solid #21262d",
+                marginBottom: "16px",
               }}
             >
-              <div>
-                <h3
-                  style={{
-                    margin: 0,
-                    fontSize: "18px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                  }}
-                >
-                  <Trophy size={20} color="#f59e0b" /> الفرق المتوازنة
-                </h3>
-                <span style={{ fontSize: "12px", color: "#8b949e" }}>
-                  {map} — {matchLevel}
-                </span>
-              </div>
+              <h3
+                style={{
+                  margin: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                }}
+              >
+                <Trophy size={20} color="#f59e0b" /> الفرق المتوازنة ({map})
+              </h3>
               <button
                 onClick={copyToClipboard}
                 style={{
@@ -566,18 +617,17 @@ export default function App() {
                   backgroundColor: "#21262d",
                   border: "1px solid #30363d",
                   color: "#fff",
-                  padding: "8px 14px",
+                  padding: "6px 12px",
                   borderRadius: "6px",
                   cursor: "pointer",
-                  fontSize: "13px",
                 }}
               >
                 {copied ? (
                   <Check size={16} color="#22c55e" />
                 ) : (
                   <Copy size={16} />
-                )}
-                {copied ? "تم النسخ!" : "نسخ التشكيلة"}
+                )}{" "}
+                {copied ? "تم النسخ" : "نسخ التشكيلة"}
               </button>
             </div>
 
@@ -586,9 +636,10 @@ export default function App() {
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
                 gap: "16px",
+                marginBottom: "20px",
               }}
             >
-              {/* CT Side */}
+              {/* CT */}
               <div
                 style={{
                   backgroundColor: "rgba(59, 130, 246, 0.05)",
@@ -597,60 +648,39 @@ export default function App() {
                   padding: "16px",
                 }}
               >
-                <div
+                <h4
                   style={{
+                    margin: "0 0 12px 0",
+                    color: "#60a5fa",
                     display: "flex",
-                    justifyContent: "space-between",
                     alignItems: "center",
-                    marginBottom: "12px",
+                    gap: "6px",
                   }}
                 >
-                  <h4
+                  <Shield size={18} /> CT (Avg Elo: {teams.ctAvg})
+                </h4>
+                {teams.ct.map((p) => (
+                  <div
+                    key={p.id}
                     style={{
-                      margin: 0,
-                      color: "#60a5fa",
                       display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
+                      justifyContent: "space-between",
+                      backgroundColor: "#0d1117",
+                      padding: "8px 12px",
+                      borderRadius: "6px",
+                      marginBottom: "6px",
+                      fontSize: "14px",
                     }}
                   >
-                    <Shield size={18} /> Counter-Terrorists (CT)
-                  </h4>
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      color: "#93c5fd",
-                      backgroundColor: "rgba(59, 130, 246, 0.2)",
-                      padding: "2px 8px",
-                      borderRadius: "12px",
-                    }}
-                  >
-                    Score: {teams.ctScore} (Avg {teams.ctAvg})
-                  </span>
-                </div>
-                <div style={{ display: "grid", gap: "8px" }}>
-                  {teams.ct.map((player) => (
-                    <div
-                      key={player.id}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        backgroundColor: "#0d1117",
-                        padding: "8px 12px",
-                        borderRadius: "6px",
-                        fontSize: "14px",
-                      }}
-                    >
-                      <span>{player.name}</span>
-                      <span style={{ color: "#f59e0b", fontWeight: "bold" }}>
-                        Lvl {player.skill}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                    <span>{p.name}</span>
+                    <span style={{ color: "#38bdf8", fontWeight: "bold" }}>
+                      Elo {p.elo_rating}
+                    </span>
+                  </div>
+                ))}
               </div>
 
-              {/* T Side */}
+              {/* T */}
               <div
                 style={{
                   backgroundColor: "rgba(249, 115, 22, 0.05)",
@@ -659,57 +689,115 @@ export default function App() {
                   padding: "16px",
                 }}
               >
-                <div
+                <h4
                   style={{
+                    margin: "0 0 12px 0",
+                    color: "#fb923c",
                     display: "flex",
-                    justifyContent: "space-between",
                     alignItems: "center",
-                    marginBottom: "12px",
+                    gap: "6px",
                   }}
                 >
-                  <h4
+                  <Swords size={18} /> T (Avg Elo: {teams.tAvg})
+                </h4>
+                {teams.t.map((p) => (
+                  <div
+                    key={p.id}
                     style={{
-                      margin: 0,
-                      color: "#fb923c",
                       display: "flex",
-                      alignItems: "center",
-                      gap: "6px",
+                      justifyContent: "space-between",
+                      backgroundColor: "#0d1117",
+                      padding: "8px 12px",
+                      borderRadius: "6px",
+                      marginBottom: "6px",
+                      fontSize: "14px",
                     }}
                   >
-                    <Swords size={18} /> Terrorists (T)
-                  </h4>
-                  <span
+                    <span>{p.name}</span>
+                    <span style={{ color: "#38bdf8", fontWeight: "bold" }}>
+                      Elo {p.elo_rating}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* إدخال النتيجة النهائية للحساب التلقائي */}
+            <div
+              style={{
+                backgroundColor: "#0d1117",
+                padding: "16px",
+                borderRadius: "8px",
+                border: "1px solid #21262d",
+              }}
+            >
+              <h4 style={{ margin: "0 0 12px 0", fontSize: "15px" }}>
+                تسجيل نتيجة المباراة النهائية:
+              </h4>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "16px",
+                  alignItems: "center",
+                  marginBottom: "12px",
+                }}
+              >
+                <div>
+                  <label style={{ fontSize: "12px", color: "#60a5fa" }}>
+                    سكور CT:
+                  </label>
+                  <input
+                    type="number"
+                    value={scoreCTInput}
+                    onChange={(e) => setScoreCTInput(Number(e.target.value))}
                     style={{
-                      fontSize: "12px",
-                      color: "#fdba74",
-                      backgroundColor: "rgba(249, 115, 22, 0.2)",
-                      padding: "2px 8px",
-                      borderRadius: "12px",
+                      width: "60px",
+                      backgroundColor: "#161b22",
+                      border: "1px solid #30363d",
+                      color: "#fff",
+                      padding: "6px",
+                      borderRadius: "4px",
+                      textAlign: "center",
+                      display: "block",
                     }}
-                  >
-                    Score: {teams.tScore} (Avg {teams.tAvg})
-                  </span>
+                  />
                 </div>
-                <div style={{ display: "grid", gap: "8px" }}>
-                  {teams.t.map((player) => (
-                    <div
-                      key={player.id}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        backgroundColor: "#0d1117",
-                        padding: "8px 12px",
-                        borderRadius: "6px",
-                        fontSize: "14px",
-                      }}
-                    >
-                      <span>{player.name}</span>
-                      <span style={{ color: "#f59e0b", fontWeight: "bold" }}>
-                        Lvl {player.skill}
-                      </span>
-                    </div>
-                  ))}
+                <span style={{ fontWeight: "bold", fontSize: "18px" }}>:</span>
+                <div>
+                  <label style={{ fontSize: "12px", color: "#fb923c" }}>
+                    سكور T:
+                  </label>
+                  <input
+                    type="number"
+                    value={scoreTInput}
+                    onChange={(e) => setScoreTInput(Number(e.target.value))}
+                    style={{
+                      width: "60px",
+                      backgroundColor: "#161b22",
+                      border: "1px solid #30363d",
+                      color: "#fff",
+                      padding: "6px",
+                      borderRadius: "4px",
+                      textAlign: "center",
+                      display: "block",
+                    }}
+                  />
                 </div>
+                <button
+                  onClick={recordMatchResult}
+                  style={{
+                    backgroundColor: "#22c55e",
+                    color: "#000",
+                    border: "none",
+                    padding: "10px 20px",
+                    borderRadius: "6px",
+                    fontWeight: "bold",
+                    cursor: "pointer",
+                    marginRight: "auto",
+                  }}
+                >
+                  حفظ النتيجة وتحديث الـ Elo 🏆
+                </button>
               </div>
             </div>
           </div>
