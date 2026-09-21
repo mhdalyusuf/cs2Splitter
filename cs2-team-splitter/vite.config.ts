@@ -4,5 +4,5 @@ import { defineConfig } from "vite";
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: "/cs2-team-splitter/",
+  base: "/cs2Splitter/cs2-team-splitter/",
 });
